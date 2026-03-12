@@ -1,0 +1,5 @@
+# .gitignore
+best_model.h5
+.env
+best.onnx
+best.pt

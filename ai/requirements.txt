@@ -1,0 +1,11 @@
+flask
+flask-cors
+opencv-python
+nump
+SpeechRecognition
+nltk
+transformers
+scipy
+tensorflow
+torch
+librosa
