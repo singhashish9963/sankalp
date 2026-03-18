@@ -2,32 +2,89 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { saveProfile } from "@/mongowork/saveProfile.js";
 
-// --- Supabase setup ---
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// --- Authenticate using uniquePresence ---
+function getProjectRefFromUrl(url) {
+  try {
+    return new URL(url).hostname.split(".")[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function getProjectRefFromJwt(token) {
+  try {
+    const payload = token?.split(".")[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4);
+    const decoded = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+    return decoded?.ref || null;
+  } catch {
+    return null;
+  }
+}
+
+function isMissingUniquePresenceColumn(error) {
+  const msg = (error?.message || "").toLowerCase();
+  return msg.includes("uniquepresence") && msg.includes("does not exist");
+}
+
+const urlRef = getProjectRefFromUrl(supabaseUrl);
+const serviceRef = getProjectRefFromJwt(serviceRoleKey);
+const selectedKey =
+  serviceRoleKey && serviceRef && serviceRef === urlRef
+    ? serviceRoleKey
+    : anonKey;
+
+const supabase = createClient(supabaseUrl, selectedKey);
+
 async function authenticateRequest(request) {
   const authHeader = request.headers.get("authorization");
   if (!authHeader) throw new Error("Authorization header missing");
 
-  const uniquePresence = authHeader.split("Bearer ")[1];
-  if (!uniquePresence) throw new Error("Unauthorized - No token provided");
+  const token = authHeader.split("Bearer ")[1];
+  if (!token) throw new Error("Unauthorized - No token provided");
+
+  // Fallback token format when users.uniquePresence column does not exist.
+  if (token.startsWith("uid:")) {
+    const userId = token.slice(4).trim();
+    if (!userId) throw new Error("Unauthorized - Invalid token");
+
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("id, name, email")
+      .eq("id", userId)
+      .single();
+
+    if (error || !user) throw new Error("Unauthorized - User not found");
+    return { user, uniquePresence: token };
+  }
 
   const { data: user, error } = await supabase
     .from("users")
     .select("id, name, email, uniquePresence")
-    .eq("uniquePresence", uniquePresence)
+    .eq("uniquePresence", token)
     .single();
+
+  if (error && isMissingUniquePresenceColumn(error)) {
+    const { data: byId, error: byIdError } = await supabase
+      .from("users")
+      .select("id, name, email")
+      .eq("id", token)
+      .single();
+
+    if (byIdError || !byId) throw new Error("Unauthorized - User not found");
+    return { user: byId, uniquePresence: `uid:${byId.id}` };
+  }
 
   if (error || !user) throw new Error("Unauthorized - User not found");
 
-  return { user, uniquePresence };
+  return { user, uniquePresence: token };
 }
 
-// --- POST: Save user profile ---
 export async function POST(request) {
   try {
     const { user, uniquePresence } = await authenticateRequest(request);
@@ -68,11 +125,21 @@ export async function POST(request) {
       joinDate,
     });
 
-    return NextResponse.json({
-      status: "success",
-      message: "Profile saved successfully",
-      data: result,
-    });
+    if (!result?.success) {
+      return NextResponse.json(
+        { status: "error", message: result?.error || "Failed to save profile" },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        status: "success",
+        message: "Profile saved successfully",
+        data: result,
+      },
+      { status: 200 }
+    );
   } catch (error) {
     console.error("SaveProfile API error:", error);
     return NextResponse.json(

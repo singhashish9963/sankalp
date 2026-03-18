@@ -5,13 +5,13 @@ import { Redis } from "@upstash/redis";
 import { saveBookmarkedJob } from "@/mongowork/saveBookmarkedJobs.js";
 import { createClient } from "@supabase/supabase-js";
 
-// --- Supabase service client ---
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// --- Optional: Upstash rate limit setup ---
+
 let redis, ratelimit;
 try {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
@@ -29,7 +29,7 @@ try {
   console.warn("Redis/Rate limiting setup failed:", error);
 }
 
-// --- Authenticate using Supabase uniquePresence ---
+
 async function authenticateRequest(request) {
   const authHeader = request.headers.get("authorization");
   if (!authHeader) throw new Error("Authorization header missing");
@@ -47,7 +47,7 @@ console.log("Authenticating with uniquePresence:", uniquePresence);
   return { user, uniquePresence };
 }
 
-// --- Rate limit check (optional) ---
+
 async function checkRateLimit(request) {
   if (!ratelimit) return { success: true };
   const ip =
@@ -64,7 +64,6 @@ async function checkRateLimit(request) {
   }
 }
 
-// --- POST: Save bookmarked job ---
 export async function POST(request) {
   try {
     const { user, uniquePresence } = await authenticateRequest(request);

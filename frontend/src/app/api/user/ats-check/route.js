@@ -20,7 +20,7 @@ try {
 
     ratelimit = new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(5, '60 s'), // More restrictive for ATS
+      limiter: Ratelimit.slidingWindow(5, '60 s'), 
     });
   }
 } catch (error) {
@@ -32,7 +32,6 @@ async function authenticateRequest(request) {
   if (!authHeader) throw new Error('Authorization header missing');
 
   const uniquePresence = authHeader.split('Bearer ')[1];
-  console.log("Authenticating ATS check with uniquePresence:", uniquePresence);
   if (!uniquePresence) throw new Error('Unauthorized - No token provided');
 
   const { data: user, error: userError } = await supabase
@@ -64,6 +63,41 @@ async function checkRateLimit(request) {
   }
 }
 
+function generateFallbackATSAnalysis(resumeText, jobDescription) {
+  const resumeLower = resumeText.toLowerCase();
+  const jdLower = jobDescription.toLowerCase();
+  
+  const commonSkills = ['python', 'javascript', 'react', 'node', 'java', 'sql', 'aws', 'docker', 'git'];
+  const matchedSkills = commonSkills.filter(skill => 
+    resumeLower.includes(skill) && jdLower.includes(skill)
+  );
+
+  const baseScore = 60;
+  const bonus = Math.min(matchedSkills.length * 2, 15); 
+  const finalScore = baseScore + bonus;
+
+  return {
+    matchScore: finalScore,
+    summary: "Your resume shows potential for this role. Consider highlighting more relevant skills and experiences that directly align with the job requirements to improve your match score.",
+    strengths: [
+      "Resume structure is clear and readable",
+      "Contains relevant professional experience",
+      "Demonstrates technical or professional skills"
+    ],
+    improvements: [
+      "Add more keywords from the job description",
+      "Quantify achievements with specific metrics",
+      "Tailor experience descriptions to match role requirements",
+      "Include relevant certifications or projects"
+    ],
+    keywords: {
+      matched: matchedSkills.length > 0 ? matchedSkills : ["general technical skills"],
+      missing: ["specific role requirements", "industry-specific terminology"]
+    },
+    fallback: true
+  };
+}
+
 export async function POST(request) {
   try {
     let uniquePresence;
@@ -82,7 +116,6 @@ export async function POST(request) {
       );
     }
 
-    // Rate Limiting Check
     const rateLimitResult = await checkRateLimit(request);
     if (!rateLimitResult.success) {
       console.warn('ATS rate limit exceeded for IP:', 
@@ -106,7 +139,6 @@ export async function POST(request) {
       );
     }
 
-    // Process request
     const body = await request.json();
     
     if (!body.doc_text || !body.jobDescription) {
@@ -119,21 +151,40 @@ export async function POST(request) {
       );
     }
 
-    console.log('ATS Check - File Name:', body.fileName);
-    console.log('ATS Check - Resume Length:', body.doc_text.length);
-    console.log('ATS Check - JD Length:', body.jobDescription.length);
+    let atsResults;
+    let usedFallback = false;
 
-    // Process with ATS agent
-    const atsResults = await processATSAnalysis(
-      body.doc_text,
-      body.jobDescription
-    );
+    try {
+      atsResults = await processATSAnalysis(
+        body.doc_text,
+        body.jobDescription
+      );
+      
+      if (!atsResults || typeof atsResults.matchScore !== 'number' || atsResults.matchScore === 0) {
+        throw new Error('Invalid ATS results from LLM');
+      }
+      
+    } catch (atsError) {
+      console.error('LLM ATS analysis failed, using fallback:', atsError);
+      usedFallback = true;
+      
+      atsResults = generateFallbackATSAnalysis(
+        body.doc_text,
+        body.jobDescription
+      );
+    }
+    
+    if (typeof atsResults.matchScore !== 'number' || isNaN(atsResults.matchScore)) {
+      console.warn('Invalid matchScore, using fallback');
+      atsResults = generateFallbackATSAnalysis(body.doc_text, body.jobDescription);
+      usedFallback = true;
+    }
 
     const responseData = {
       timestamp: new Date().toISOString(),
       fileName: body.fileName,
       atsAnalysis: atsResults,
-      // saved: mongoResult.success
+      usedFallback: usedFallback,
     };
 
     if (rateLimitResult.remaining !== undefined) {
@@ -144,7 +195,9 @@ export async function POST(request) {
     }
 
     return NextResponse.json({
-      message: 'ATS analysis completed successfully',
+      message: usedFallback 
+        ? 'ATS analysis completed with basic scoring (AI analysis unavailable)' 
+        : 'ATS analysis completed successfully',
       status: 'success',
       data: responseData,
     });
