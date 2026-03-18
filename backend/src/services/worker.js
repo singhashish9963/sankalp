@@ -1,5 +1,4 @@
-import pkg from '@prisma/client';
-const { PrismaClient } = pkg;
+import { PrismaClient } from "@prisma/client";
 import { 
   evaluateAnswer, 
   generateReport, 
@@ -57,7 +56,7 @@ const transcripts = await prisma.transcript.findMany({
 const reportText = await generateReport(
   transcripts.map(t => ({
     question: t.question.text,
-    transcript: t.answerText,
+    transcript: t.transcript,
     evaluation: JSON.parse(t.evaluation || '{}'),
   })),
   sessionAnalysis

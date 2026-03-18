@@ -6,14 +6,13 @@ const llmClient = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-async function callLLM(messages, model = "tngtech/deepseek-r1t2-chimera:free") {
-  console.log("🧠 [LLM] Sending request to model:", model);
+async function callLLM(messages, model = "openrouter/healer-alpha") {
   try {
     const completion = await llmClient.chat.completions.create({
       model,
       messages,
       temperature: 0.2,
-      max_tokens: 3000,
+      max_tokens: 2000,
     });
 
     const firstMessage = completion.choices?.[0]?.message || {};
@@ -32,19 +31,16 @@ async function callLLM(messages, model = "tngtech/deepseek-r1t2-chimera:free") {
       }
     }
 
-    console.log("✅ [LLM] Response received successfully.");
     return { content: textContent.trim() };
   } catch (err) {
-    console.error("❌ [LLM] Error during API call:", err);
+    console.error("Error during API call:", err);
     return { content: "" };
   }
 }
 
 export async function processATSAnalysis(resumeText = "", jobDescription = "") {
-  console.log("🚀 Starting ATS Analysis...");
 
   if (!resumeText || !jobDescription) {
-    console.warn("⚠️ Missing resume or job description input.");
     return {
       error: "Missing resume or job description",
       matchScore: 0,
@@ -57,8 +53,6 @@ export async function processATSAnalysis(resumeText = "", jobDescription = "") {
     };
   }
 
-  console.log("📄 Resume Length:", resumeText.length);
-  console.log("📋 Job Description Length:", jobDescription.length);
 
   const systemPrompt = `
 You are an advanced Applicant Tracking System (ATS) analyzer.
@@ -97,7 +91,6 @@ Job Description:
 ${jobDescription}
 `;
 
-  console.log("🧾 [Prompt] Sending to LLM...");
   let response;
   try {
     response = await callLLM([
@@ -105,44 +98,48 @@ ${jobDescription}
       { role: "user", content: userPrompt },
     ]);
   } catch (err) {
-    console.error("❌ [LLM Error] Failed before parsing:", err);
     response = { content: "" };
   }
 
-  console.log("🧩 [Raw LLM Output]:", response?.content?.substring(0, 500) + "...");
 
   let parsed = {};
   try {
-    parsed = parseJsonC(response.content || "{}", undefined, { allowTrailingComma: true });
+    let raw = (response.content || "{}").trim();
+    // Strip markdown code fences: handle text before/after fences
+    const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
+    if (fenceMatch) {
+      raw = fenceMatch[1].trim();
+    }
+    console.log("[ATS LLM raw response]", raw.slice(0, 500));
+    parsed = parseJsonC(raw || "{}", undefined, { allowTrailingComma: true });
     if (typeof parsed !== "object" || parsed === null) parsed = {};
-    console.log("✅ [JSON Parsing] Successful.");
   } catch (err) {
-    console.warn("⚠️ [JSON Parsing] Failed, using fallback:", err);
+    console.warn(" [JSON Parsing] Failed, using fallback:", err);
   }
 
-  // Ensure valid structure before accessing nested fields
   const analysis = parsed?.analysis || {};
   const extractedKeywords = parsed?.extractedKeywords || { resume: [], jd: [] };
 
-  // If parsing failed and no analysis, fallback to keyword-based rough match
   if (!analysis || Object.keys(analysis).length === 0) {
-    console.log("⚙️ [Fallback] Generating simple keyword comparison...");
-    const resumeWords = resumeText.toLowerCase().split(/\W+/);
-    const jdWords = jobDescription.toLowerCase().split(/\W+/);
-    const matched = jdWords.filter((word) => resumeWords.includes(word));
-    const uniqueMatched = [...new Set(matched)].slice(0, 15);
+    const resumeWordSet = new Set(
+      resumeText.toLowerCase().split(/\W+/).filter((w) => w.length > 3)
+    );
+    const uniqueJdWords = [
+      ...new Set(jobDescription.toLowerCase().split(/\W+/).filter((w) => w.length > 3)),
+    ];
+    const matched = uniqueJdWords.filter((word) => resumeWordSet.has(word));
 
-    const matchScore = jdWords.length
-      ? Math.round((uniqueMatched.length / jdWords.length) * 100)
+    const matchScore = uniqueJdWords.length
+      ? Math.round((matched.length / uniqueJdWords.length) * 100)
       : 0;
 
     return {
       matchScore,
       missingKeywords: [],
-      presentKeywords: uniqueMatched,
+      presentKeywords: matched,
       profileSummary: `Rough match score based on keyword overlap: ${matchScore}%`,
       recommendations: ["Ensure your resume covers key job terms."],
-      strengthAreas: uniqueMatched.length > 0 ? ["Keyword alignment"] : [],
+      strengthAreas: matched.length > 0 ? ["Keyword alignment"] : [],
       applicationSuccessRate: Math.max(30, matchScore - 10),
       cleanedResume: resumeText,
       cleanedJD: jobDescription,
@@ -151,23 +148,24 @@ ${jobDescription}
   }
 
   const result = {
-    matchScore: analysis.matchScore || 0,
-    missingKeywords: analysis.missingKeywords || [],
-    presentKeywords: analysis.presentKeywords || [],
-    profileSummary: analysis.profileSummary || "Analysis completed",
-    recommendations: analysis.recommendations || [],
-    strengthAreas: analysis.strengthAreas || [],
-    applicationSuccessRate: analysis.applicationSuccessRate || 0,
-    cleanedResume: parsed.cleanedResume || resumeText,
-    cleanedJD: parsed.cleanedJD || jobDescription,
-    extractedKeywords,
-  };
+  matchScore: analysis.matchScore || 0,
+  missingKeywords: analysis.missingKeywords || [],
+  presentKeywords: analysis.presentKeywords || [],
+  profileSummary: analysis.profileSummary || "Analysis completed",
+  recommendations: analysis.recommendations || [],
+  strengthAreas: analysis.strengthAreas || [],
+  applicationSuccessRate: analysis.applicationSuccessRate || 0,
+  cleanedResume: parsed.cleanedResume || resumeText,
+  cleanedJD: parsed.cleanedJD || jobDescription,
+  extractedKeywords,
+};
 
-  console.log("✅ [Final Output Ready]:", {
-    matchScore: result.matchScore,
-    missing: result.missingKeywords.length,
-    present: result.presentKeywords.length,
-  });
+console.log({
+  matchScore: result.matchScore,
+  missing: result.missingKeywords.length,
+  present: result.presentKeywords.length,
+});
 
-  return result;
+return result;
+
 }

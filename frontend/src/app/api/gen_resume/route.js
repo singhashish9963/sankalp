@@ -1,8 +1,5 @@
 import { NextResponse } from 'next/server'
 
-// ============================================
-// MAIN API HANDLER
-// ============================================
 export async function POST(request) {
   const url = new URL(request.url)
   const action = url.searchParams.get('action')
@@ -14,9 +11,6 @@ export async function POST(request) {
   }
 }
 
-// ============================================
-// GENERATE LATEX WITH LLM
-// ============================================
 async function handleGenerate(request) {
   try {
     const { form } = await request.json()
@@ -29,7 +23,6 @@ async function handleGenerate(request) {
 
     const prompt = buildLatexPrompt(form)
 
-    // Call OpenRouter API
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -70,10 +63,8 @@ async function handleGenerate(request) {
       })
     }
 
-    // Clean and fix LaTeX
     latex = cleanLatexCode(latex)
     
-    // Validate and test
     const validation = validateLatex(latex)
     if (!validation.valid) {
       console.warn('⚠️ LLM output failed validation:', validation.errors)
@@ -102,77 +93,73 @@ async function handleGenerate(request) {
   }
 }
 
-// ============================================
-// BUILD PROMPT
-// ============================================
 function buildLatexPrompt(form) {
-  return `Create a LaTeX resume document. Output ONLY the LaTeX code, nothing else.
+  return `You are creating a professional LaTeX resume. Use the DATA provided below and insert it into the LaTeX template structure.
 
-Use this EXACT template structure:
+=== USER DATA (USE THESE EXACT VALUES) ===
+Name: ${form.name}
+Job Title: ${form.title || 'N/A'}
+Email: ${form.email}
+Phone: ${form.phone || 'N/A'}
+Summary: ${form.summary || 'N/A'}
+
+Work Experience:
+${form.jobs || 'N/A'}
+
+Projects:
+${form.projects || 'N/A'}
+
+Skills: ${form.skills || 'N/A'}
+
+=== END USER DATA ===
+
+Now generate a LaTeX resume using this EXACT structure but replace [NAME], [TITLE], etc. with the actual data above:
 
 \\documentclass[11pt,a4paper]{article}
 \\usepackage[margin=1in]{geometry}
 \\usepackage{enumitem}
 \\pagestyle{empty}
 \\begin{document}
+
 \\begin{center}
-{\\Large \\textbf{${form.name}}}\\\\[0.2cm]
-${form.title}\\\\[0.1cm]
-${form.email}${form.phone ? ' | ' + form.phone : ''}
+{\\Large \\textbf{[NAME]}}\\\\[0.2cm]
+[TITLE]\\\\[0.1cm]
+[EMAIL] | [PHONE]
 \\end{center}
 
 \\section*{Summary}
-${form.summary}
+[SUMMARY_TEXT]
 
 \\section*{Experience}
 \\begin{itemize}[leftmargin=*]
-${form.jobs.split('\n').filter(j => j.trim()).map(job => {
-  const parts = job.split('|').map(p => p.trim())
-  if (parts.length >= 3) {
-    return `\\item \\textbf{${parts[0]}} | ${parts[1]} | ${parts[2]}${parts[3] ? '\\\\' + parts[3] : ''}`
-  }
-  return `\\item ${job}`
-}).join('\n')}
+[WORK_ITEMS - Format each job as: \\item \\textbf{Job Title} | Company | Dates\\\\Description]
 \\end{itemize}
 
 \\section*{Projects}
 \\begin{itemize}[leftmargin=*]
-${form.projects.split('\n').filter(p => p.trim()).map(proj => {
-  const parts = proj.split('|').map(p => p.trim())
-  if (parts.length >= 2) {
-    return `\\item \\textbf{${parts[0]}} | ${parts[1]}${parts[2] ? '\\\\' + parts[2] : ''}`
-  }
-  return `\\item ${proj}`
-}).join('\n')}
+[PROJECT_ITEMS - Format each as: \\item \\textbf{Project Name} | Technologies\\\\Description]
 \\end{itemize}
 
 \\section*{Skills}
-${form.skills}
+[SKILLS_LIST]
 
 \\end{document}
 
 CRITICAL RULES:
-1. Copy the template EXACTLY as shown above
-2. Only replace the data values (name, email, etc.)
-3. Keep ALL backslashes exactly as shown
-4. Keep ALL braces exactly as shown  
-5. Do NOT add extra braces
-6. Do NOT use markdown syntax
-7. Output ONLY the LaTeX code above with data filled in`
+1. Use ONLY the data from USER DATA section above
+2. Do NOT invent or use example data like "John Doe" or "ABC Corporation"
+3. If a field is N/A, omit that section entirely
+4. Output ONLY the LaTeX code with real data inserted
+5. Do NOT include markdown, code blocks, or explanations`
 }
 
-// ============================================
-// CLEAN LATEX CODE (AGGRESSIVE)
-// ============================================
 function cleanLatexCode(input) {
   let latex = input
 
-  // Remove code blocks
-  latex = latex.replace(/```[\s\S]*?```/g, ''); // Removes entire code blocks
-  latex = latex.replace(/```\s*/g, '');         // Fallback for stray triple backticks
+  latex = latex.replace(/```[\s\S]*?```/g, '');
+  latex = latex.replace(/```\s*/g, '');        
   latex = latex.trim();
 
-  // Extract only the LaTeX document
   const docClassIndex = latex.indexOf('\\documentclass')
   if (docClassIndex > 0) {
     latex = latex.substring(docClassIndex)
@@ -183,43 +170,30 @@ function cleanLatexCode(input) {
     latex = latex.substring(0, endDocIndex + 14)
   }
 
-  // FIX CRITICAL ERRORS
-
-  // 1. Fix double braces in sections: \section*{{Text} -> \section*{Text}
   latex = latex.replace(/\\section\*\{\{([^}]+)\}/g, '\\section*{$1}')
-  
-  // 2. Fix missing closing braces in sections
+
   latex = latex.replace(/\\section\*\{([^}]+)$/gm, '\\section*{$1}')
 
-  // 3. Remove markdown links
   latex = latex.replace(/$$([^$$]+)$$$$[^)]+$$/g, '$1')
 
-  // 4. Fix markdown bold to LaTeX
   latex = latex.replace(/\*\*([^*]+)\*\*/g, '\\textbf{$1}')
   latex = latex.replace(/\*([^*\n]+)\*/g, '\\textit{$1}')
 
-  // 5. Fix malformed itemize - ensure it's on its own line
   latex = latex.replace(/\\begin\{itemize\}\s*$$leftmargin=\*$$/g, '\\begin{itemize}[leftmargin=*]')
-  
-  // 6. Fix leftmargin parameter corruption
+ 
   latex = latex.replace(/$$leftmargin=\\text(it|bf)\{[^}]*\}$$/g, '[leftmargin=*]')
   latex = latex.replace(/leftmargin=[^*$$]+$$/g, 'leftmargin=*]')
 
-  // 7. Fix \large to \Large
   latex = latex.replace(/\\large\s+/g, '{\\Large ')
   latex = latex.replace(/\\large([^a-zA-Z])/g, '{\\Large$1')
 
-  // 8. Fix broken section commands
   latex = latex.replace(/\\section\s*\\text(it|bf)\{([^}]+)\}\{/g, '\\section*{$2}')
   latex = latex.replace(/\\section\}\{/g, '\\section*{')
 
-  // 9. Ensure proper spacing after \\
   latex = latex.replace(/\\\\\s*$$/g, '\\\$$')
 
-  // 10. Fix enumerate package issues
   latex = latex.replace(/\\usepackage\{enumerate\}/g, '\\usepackage{enumitem}')
 
-  // Ensure required structure
   if (!latex.includes('\\usepackage{enumitem}')) {
     latex = latex.replace(/\\usepackage\{geometry\}/, '\\usepackage{geometry}\n\\usepackage{enumitem}')
   }
@@ -227,19 +201,16 @@ function cleanLatexCode(input) {
   return latex
 }
 
-// ============================================
-// VALIDATE LATEX
-// ============================================
 function validateLatex(latex) {
   const errors = []
 
-  // Check required components
+  // Check components
   if (!latex.includes('\\documentclass')) errors.push('Missing documentclass')
   if (!latex.includes('\\begin{document}')) errors.push('Missing begin document')
   if (!latex.includes('\\end{document}')) errors.push('Missing end document')
   if (!latex.includes('\\usepackage{enumitem}')) errors.push('Missing enumitem package')
 
-  // Check for double braces in sections
+  // Check for double braces
   if (latex.match(/\\section\*\{\{/)) errors.push('Double braces in section')
 
   // Check balanced braces
@@ -247,7 +218,7 @@ function validateLatex(latex) {
   const closeBraces = (latex.match(/\}/g) || []).length
   if (openBraces !== closeBraces) errors.push(`Unbalanced braces: ${openBraces} open, ${closeBraces} close`)
 
-  // Check for markdown artifacts
+  // Check markdown artifacts
   if (latex.match(/$$[^$$]+$$$$[^)]+$$/)) errors.push('Contains markdown links')
   if (latex.match(/\*\*[^*]+\*\*/)) errors.push('Contains markdown bold')
 
@@ -264,9 +235,6 @@ function validateLatex(latex) {
   }
 }
 
-// ============================================
-// FALLBACK TEMPLATE (100% RELIABLE)
-// ============================================
 function generateFallbackTemplate(form) {
   const jobs = form.jobs.split('\n').filter(j => j.trim()).map(j => j.trim())
   const projects = form.projects.split('\n').filter(p => p.trim()).map(p => p.trim())

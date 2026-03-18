@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:3001';
+const API_URL = 'http://localhost:3000';
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {  
   if (request.action === 'saveText') {

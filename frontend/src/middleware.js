@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 
 export async function middleware(request) {
+  const uniquePresence = request.cookies.get("uniquePresence")?.value;
+  if (uniquePresence) {
+    return NextResponse.next();
+  }
+
   const cookies = request.cookies.getAll();
   const authCookie = cookies.find(cookie => 
     cookie.name.startsWith('sb-') && cookie.name.endsWith('-auth-token')
