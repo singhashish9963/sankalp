@@ -1,5 +1,5 @@
 import { StateGraph, Annotation } from '@langchain/langgraph';
-import { TavilySearch } from "@langchain/tavily";
+import {TavilySearch} from '@langchain/tavily'
 import OpenAI from "openai";
 import { parse as parseJsonC } from 'jsonc-parser';
 
@@ -8,7 +8,8 @@ const llmClient = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-async function callLLM(messages, model = "tngtech/deepseek-r1t2-chimera:free") {
+
+async function callLLM(messages, model = "openrouter/healer-alpha") {
   try {
     const completion = await llmClient.chat.completions.create({
       model,
@@ -16,6 +17,7 @@ async function callLLM(messages, model = "tngtech/deepseek-r1t2-chimera:free") {
       temperature: 0.3,
       max_tokens: 3000,
     });
+
 
     const firstMessage = completion.choices[0].message;
     let textContent = "";
@@ -37,12 +39,14 @@ async function callLLM(messages, model = "tngtech/deepseek-r1t2-chimera:free") {
       }
     }
 
+
     return { content: textContent || "" };
   } catch (err) {
     console.error("LLM call error:", err);
     return { content: "" };
   }
 }
+
 
 const RoadmapState = Annotation.Root({
   bookmarkedJobs: Annotation({
@@ -71,10 +75,12 @@ const RoadmapState = Annotation.Root({
   }),
 });
 
+
 const webSearchTool = new TavilySearch({
-  maxResults: 3,
+  maxResults: 5,
   apiKey: process.env.TAVILY_API_KEY,
 });
+
 
 async function analyzeJobRequirements(state) {
   const { bookmarkedJobs, userSkills, currentJobIndex } = state;
@@ -84,11 +90,14 @@ async function analyzeJobRequirements(state) {
     return { ...state, jobAnalysis: {} };
   }
 
+
   const prompt = `
 Analyze this job posting and extract the required skills and qualifications:
 
+
 Job Title: ${currentJob.title}
 Company: ${currentJob.company}
+
 
 Based on typical requirements for this role, list the key technical skills, tools, and qualifications needed.
 Return as JSON with this format:
@@ -98,13 +107,12 @@ Return as JSON with this format:
 }
 `;
 
+
   try {
     const response = await callLLM([
       { role: "system", content: "You are a job requirements analyst. Return only valid JSON." },
       { role: "user", content: prompt }
     ]);
-
-    console.log("Job analysis response:", response.content);
     
     let parsed;
     try {
@@ -114,12 +122,12 @@ Return as JSON with this format:
       parsed = { requiredSkills: [], niceToHave: [] };
     }
 
-    // Calculate skill gaps
     const requiredSkills = parsed.requiredSkills || [];
     const userSkillsLower = userSkills.map(s => s.toLowerCase());
     const skillGaps = requiredSkills.filter(
       skill => !userSkillsLower.some(us => us.includes(skill.toLowerCase()) || skill.toLowerCase().includes(us))
     );
+
 
     const analysis = {
       jobId: currentJob.jobId,
@@ -128,6 +136,7 @@ Return as JSON with this format:
       skillGaps,
       matchingSkills: requiredSkills.filter(skill => !skillGaps.includes(skill))
     };
+
 
     return { ...state, jobAnalysis: analysis };
   } catch (err) {
@@ -145,6 +154,33 @@ Return as JSON with this format:
   }
 }
 
+
+async function fetchLearningResources(skill) {
+  try {
+    const query = `best courses tutorials learn ${skill} 2025`;
+    const results = await webSearchTool.invoke(query);
+    if (Array.isArray(results)) {
+      return results.slice(0, 3).map(result => ({
+        title: extractTitle(result.content) || `Learn ${skill}`,
+        url: result.url,
+        description: result.content.substring(0, 150)
+      }));
+    }
+    
+    return [];
+  } catch (err) {
+    console.error(`Error fetching resources for ${skill}:`, err);
+    return [];
+  }
+}
+
+
+function extractTitle(content) {
+  const firstSentence = content.split('.')[0];
+  return firstSentence.length > 60 ? firstSentence.substring(0, 60) + '...' : firstSentence;
+}
+
+
 async function generateJobRoadmap(state) {
   const { bookmarkedJobs, userSkills, currentJobIndex, jobAnalysis } = state;
   const currentJob = bookmarkedJobs[currentJobIndex];
@@ -153,9 +189,11 @@ async function generateJobRoadmap(state) {
     return state;
   }
 
+
   const systemPrompt = `
 You are an expert career development advisor and learning path designer.
 Your task is to create a detailed, actionable learning roadmap for someone preparing for a specific job role.
+
 
 Return ONLY a valid JSON array with this exact structure:
 [
@@ -163,51 +201,53 @@ Return ONLY a valid JSON array with this exact structure:
     "step": 1,
     "title": "Short descriptive title",
     "description": "Detailed description of what to learn and why",
-    "resources": ["resource1", "resource2", "resource3"],
     "estimatedDuration": "time estimate (e.g., 2-3 months)",
     "skills": ["skill1", "skill2"]
   }
 ]
 
+
 Important:
 - Create 4-7 steps in logical learning order
 - Each step should build on previous steps
-- Include specific, actionable resources (courses, books, platforms)
 - Be realistic with time estimates
 - Focus on practical, job-relevant skills
+- Do NOT include resources field - it will be added separately
 `;
+
 
   const userPrompt = `
 Job Title: ${currentJob.title}
 Company: ${currentJob.company}
 
+
 User's Current Skills: ${userSkills.join(', ') || 'No specific skills listed'}
+
 
 Required Skills for Job: ${jobAnalysis.requiredSkills.join(', ')}
 Skill Gaps to Address: ${jobAnalysis.skillGaps.join(', ') || 'None - user has most required skills'}
 Nice to Have: ${jobAnalysis.niceToHave.join(', ')}
+
 
 Create a learning roadmap that:
 1. Prioritizes the most critical skill gaps first
 2. Builds on the user's existing skills
 3. Prepares them specifically for the ${currentJob.title} role at ${currentJob.company}
 4. Includes practical projects or portfolio work where relevant
-5. Suggests industry-standard resources and platforms
+
 
 Return ONLY the JSON array, no additional text.
 `;
+
 
   try {
     const response = await callLLM([
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt }
-    ], "tngtech/deepseek-r1t2-chimera:free");
-
-    console.log(`Roadmap response for ${currentJob.jobId}:`, response.content.substring(0, 200));
+    ], "openrouter/healer-alpha");
 
     let roadmapArray;
     try {
-      // Try to extract JSON from response
       const jsonMatch = response.content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         roadmapArray = parseJsonC(jsonMatch[0], undefined, { allowTrailingComma: true });
@@ -223,10 +263,33 @@ Return ONLY the JSON array, no additional text.
       roadmapArray = createFallbackRoadmap(currentJob, jobAnalysis);
     }
 
+    for (let step of roadmapArray) {
+      const stepSkills = step.skills || [];
+      const allResources = [];
+
+      for (const skill of stepSkills.slice(0, 2)) { 
+        const resources = await fetchLearningResources(skill);
+        allResources.push(...resources);
+      }
+      step.resources = allResources.slice(0, 4);
+      
+      if (step.resources.length === 0) {
+        step.resources = [
+          {
+            title: `Search for ${stepSkills[0] || 'relevant'} tutorials`,
+            url: `https://www.google.com/search?q=learn+${encodeURIComponent(stepSkills[0] || currentJob.title)}`,
+            description: "Explore online courses and documentation"
+          }
+        ];
+      }
+    }
+
+
     const updatedRoadmaps = {
       ...state.roadmaps,
       [currentJob.jobId]: roadmapArray
     };
+
 
     return { ...state, roadmaps: updatedRoadmaps };
   } catch (err) {
@@ -240,6 +303,7 @@ Return ONLY the JSON array, no additional text.
   }
 }
 
+
 function createFallbackRoadmap(job, analysis) {
   const skillGaps = analysis.skillGaps || [];
   
@@ -250,9 +314,11 @@ function createFallbackRoadmap(job, analysis) {
         title: "Advanced Skills Development",
         description: `You already have the fundamental skills for ${job.title}. Focus on advanced topics and real-world projects.`,
         resources: [
-          "Build portfolio projects",
-          "Contribute to open source",
-          "Practice system design interviews"
+          {
+            title: "Build Portfolio Projects",
+            url: "https://github.com/topics/portfolio",
+            description: "Create projects to showcase your skills"
+          }
         ],
         estimatedDuration: "2-3 months",
         skills: analysis.requiredSkills.slice(0, 3)
@@ -260,34 +326,41 @@ function createFallbackRoadmap(job, analysis) {
     ];
   }
 
+
   return skillGaps.slice(0, 5).map((skill, index) => ({
     step: index + 1,
     title: `Learn ${skill}`,
     description: `Master ${skill} to meet the requirements for ${job.title} at ${job.company}`,
     resources: [
-      `Online courses for ${skill}`,
-      `Official documentation`,
-      `Practice projects`
+      {
+        title: `${skill} Learning Resources`,
+        url: `https://www.google.com/search?q=learn+${encodeURIComponent(skill)}`,
+        description: `Find courses and tutorials for ${skill}`
+      }
     ],
     estimatedDuration: "1-2 months",
     skills: [skill]
   }));
 }
 
+
 function shouldProcessNextJob(state) {
   const { bookmarkedJobs, currentJobIndex } = state;
   return currentJobIndex < bookmarkedJobs.length - 1 ? "analyzeJob" : "finalize";
 }
 
+
 async function incrementJobIndex(state) {
   return { ...state, currentJobIndex: state.currentJobIndex + 1 };
 }
+
 
 async function finalizeOutput(state) {
   return { ...state, finalOutput: state.roadmaps };
 }
 
-// Build the workflow graph
+
+// workflow graph
 const workflow = new StateGraph(RoadmapState)
   .addNode("analyzeJob", analyzeJobRequirements)
   .addNode("generateRoadmap", generateJobRoadmap)
@@ -302,12 +375,15 @@ const workflow = new StateGraph(RoadmapState)
   })
   .addEdge("finalize", "__end__");
 
+
 const graph = workflow.compile();
+
 
 export async function generateRoadmaps(bookmarkedJobs = [], userSkills = []) {
   if (!bookmarkedJobs || bookmarkedJobs.length === 0) {
     return { error: "No bookmarked jobs provided" };
   }
+
 
   const initialState = {
     bookmarkedJobs,
@@ -318,6 +394,7 @@ export async function generateRoadmaps(bookmarkedJobs = [], userSkills = []) {
     finalOutput: {}
   };
 
+
   try {
     const resultState = await graph.invoke(initialState);
     return resultState.finalOutput || {};
@@ -326,5 +403,6 @@ export async function generateRoadmaps(bookmarkedJobs = [], userSkills = []) {
     return { error: error.message };
   }
 }
+
 
 export { graph as roadmapGenerationGraph };

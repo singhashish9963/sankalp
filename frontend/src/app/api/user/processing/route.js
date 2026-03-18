@@ -82,7 +82,6 @@ export async function POST(request) {
       );
     }
 
-    // Rate Limiting Check
     const rateLimitResult = await checkRateLimit(request);
     if (!rateLimitResult.success) {
       console.warn('Rate limit exceeded for IP:', 
@@ -106,7 +105,6 @@ export async function POST(request) {
       );
     }
 
-    // Process request
     const body = await request.json();
   
     
@@ -141,7 +139,7 @@ export async function POST(request) {
       body.doc_text || null,
       body.goals || null
     );
-    // !save
+  
     const mongoResult = await saveGoalsAndSkills(llmResults.goals, llmResults.skills, uniquePresence);
     responseData.llmAnalysis = llmResults;
     
@@ -178,4 +176,3 @@ export async function POST(request) {
     );
   }
 }
-
